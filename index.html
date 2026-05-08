@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hand Gesture Drawing</title>
+    
+    <!-- MediaPipe Hands CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        :root {
+            --bg-color: #050510;
+            --text-color: #ffffff;
+            --glass-bg: rgba(20, 25, 40, 0.4);
+            --glass-border: rgba(255, 255, 255, 0.15);
+            --glass-blur: blur(16px);
+            --accent: #00ffcc;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            overflow: hidden;
+        }
+
+        .video-container {
+            position: absolute;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        .input_video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror */
+            z-index: 0; 
+        }
+
+        #mainCanvas, #drawingCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror */
+        }
+
+        #drawingCanvas {
+            z-index: 4;
+            pointer-events: none;
+        }
+
+        #mainCanvas {
+            z-index: 5;
+            pointer-events: none;
+        }
+
+        /* UI Overlays */
+        #hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            pointer-events: none;
+        }
+
+        .panel {
+            background: var(--glass-bg);
+            backdrop-filter: var(--glass-blur);
+            -webkit-backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            padding: 15px 20px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+            pointer-events: auto; /* Allow clicking buttons in panel */
+        }
+
+        .stat {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.8);
+            min-width: 180px;
+        }
+        .stat:last-child { margin-bottom: 0; }
+        .stat span.val { font-weight: bold; color: var(--accent); }
+
+        .clear-btn {
+            margin-top: 10px;
+            padding: 8px 16px;
+            background: rgba(255, 0, 0, 0.3);
+            border: 1px solid rgba(255, 0, 0, 0.5);
+            color: white;
+            border-radius: 6px;
+            cursor: pointer;
+            width: 100%;
+            font-weight: bold;
+            transition: 0.3s;
+        }
+        .clear-btn:hover {
+            background: rgba(255, 0, 0, 0.6);
+        }
+
+        /* Themes */
+        #themes {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            display: flex;
+            gap: 10px;
+            background: var(--glass-bg);
+            backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--glass-border);
+            border-radius: 30px;
+            padding: 8px;
+            transition: opacity 0.5s;
+        }
+
+        .theme-btn {
+            background: transparent;
+            border: 1px solid transparent;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: 0.3s ease;
+            font-weight: 500;
+        }
+        
+        .theme-btn.active {
+            background: rgba(255,255,255,0.15);
+            border-color: rgba(255,255,255,0.3);
+            text-shadow: 0 0 10px white;
+        }
+
+        /* Start Overlay */
+        #startOverlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(0,0,0,0.85);
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(10px);
+            transition: opacity 0.5s ease;
+        }
+
+        .start-btn {
+            padding: 16px 40px;
+            font-size: 1.2rem;
+            background: linear-gradient(45deg, #00ffcc, #3333ff);
+            border: none;
+            color: white;
+            border-radius: 30px;
+            cursor: pointer;
+            box-shadow: 0 0 20px rgba(0, 255, 204, 0.5);
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            transition: transform 0.2s;
+        }
+        .start-btn:hover { transform: scale(1.05); }
+
+        .hidden { opacity: 0; pointer-events: none; }
+    </style>
+</head>
+<body>
+
+    <!-- Start Overlay -->
+    <div id="startOverlay">
+        <h1 style="margin-bottom: 20px; font-weight: 300; letter-spacing: 4px;">GESTURE DRAWING</h1>
+        <p style="margin-bottom: 40px; color: #888;">Grant camera permissions and click to start. Pinch your thumb and index finger to draw.</p>
+        <button class="start-btn" id="startBtn">Enter Experience</button>
+    </div>
+
+    <div class="video-container">
+        <video class="input_video" autoplay playsinline></video>
+        <canvas id="drawingCanvas"></canvas>
+        <canvas id="mainCanvas"></canvas>
+    </div>
+
+    <!-- UI Overlay -->
+    <div id="hud" class="hidden">
+        <div class="panel">
+            <div class="stat">Hands Detected: <span class="val" id="ui-hands">0</span></div>
+            <div class="stat">FPS: <span class="val" id="ui-fps">0</span></div>
+            <div class="stat">Status: <span class="val" id="ui-status">Hovering</span></div>
+            <button class="clear-btn" id="clearBtn">Clear Canvas</button>
+        </div>
+    </div>
+
+    <div id="themes" class="hidden">
+        <button class="theme-btn active" data-theme="Rainbow">Rainbow</button>
+        <button class="theme-btn" data-theme="NeonPink">Neon Pink</button>
+        <button class="theme-btn" data-theme="ElectricBlue">Electric Blue</button>
+        <button class="theme-btn" data-theme="LaserGreen">Laser Green</button>
+        <button class="theme-btn" data-theme="Eraser">Eraser</button>
+    </div>
+
+<script>
+/** 
+ * GLOBALS & CONFIG
+ */
+const videoElement = document.querySelector('.input_video');
+const drawingCanvas = document.getElementById('drawingCanvas');
+const mainCanvas = document.getElementById('mainCanvas');
+const drawingCtx = drawingCanvas.getContext('2d', { willReadFrequently: true });
+const ctx = mainCanvas.getContext('2d');
+
+let width = window.innerWidth;
+let height = window.innerHeight;
+
+let time = 0;
+let lastTime = performance.now();
+let framesThisSecond = 0;
+let lastFpsTime = performance.now();
+
+let currentHands = [];
+
+// Theme Config
+let currentTheme = 'Rainbow';
+const themes = {
+    'Rainbow':   (t) => `hsl(${(t * 50) % 360}, 100%, 60%)`,
+    'NeonPink':  (t) => '#ff00cc',
+    'ElectricBlue': (t) => '#00f0ff',
+    'LaserGreen':   (t) => '#00ff33',
+    'Eraser':       (t) => 'rgba(0,0,0,1)' // Special handling below
+};
+
+// UI Elements
+const uiHands = document.getElementById('ui-hands');
+const uiFps = document.getElementById('ui-fps');
+const uiStatus = document.getElementById('ui-status');
+
+// Drawing state
+let lastDrawPoints = {};
+
+/**
+ * INITIALIZATION
+ */
+function resize() {
+    // Save current drawing
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = width;
+    tempCanvas.height = height;
+    tempCanvas.getContext('2d').drawImage(drawingCanvas, 0, 0);
+
+    width = window.innerWidth;
+    height = window.innerHeight;
+    
+    drawingCanvas.width = width;
+    drawingCanvas.height = height;
+    mainCanvas.width = width;
+    mainCanvas.height = height;
+    
+    // Restore drawing after resize
+    drawingCtx.drawImage(tempCanvas, 0, 0, width, height);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// UI Theme Switcher
+document.querySelectorAll('.theme-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+        document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active'));
+        e.target.classList.add('active');
+        currentTheme = e.target.getAttribute('data-theme');
+        if (currentTheme !== 'Eraser') {
+            document.documentElement.style.setProperty('--accent', themes[currentTheme](0));
+        } else {
+            document.documentElement.style.setProperty('--accent', '#ffffff');
+        }
+    });
+});
+
+document.getElementById('clearBtn').addEventListener('click', () => {
+    drawingCtx.clearRect(0, 0, width, height);
+});
+
+// Start button
+document.getElementById('startBtn').addEventListener('click', () => {
+    document.getElementById('startOverlay').classList.add('hidden');
+    document.getElementById('hud').classList.remove('hidden');
+    document.getElementById('themes').classList.remove('hidden');
+    initMediaPipe();
+    requestAnimationFrame(renderLoop);
+});
+
+/**
+ * MATH & STATE LOGIC
+ */
+function getDist(p1, p2) {
+    return Math.hypot(p1.x - p2.x, p1.y - p2.y);
+}
+
+function mapToCanvas(point) {
+    return { x: point.x * width, y: point.y * height };
+}
+
+/**
+ * MAIN RENDER PIPELINE
+ */
+function renderLoop(timestamp) {
+    requestAnimationFrame(renderLoop);
+    
+    let dt = (timestamp - lastTime) / 1000;
+    lastTime = timestamp;
+    time += dt;
+
+    // Update FPS Counter
+    framesThisSecond++;
+    if (timestamp > lastFpsTime + 1000) {
+        uiFps.innerText = framesThisSecond;
+        framesThisSecond = 0;
+        lastFpsTime = timestamp;
+    }
+
+    ctx.clearRect(0, 0, width, height);
+    
+    let isDrawingGlobal = false;
+
+    if (currentHands.length > 0) {
+        currentHands.forEach((hand, handIndex) => {
+            // Draw skeleton on mainCanvas
+            drawConnectors(ctx, hand, HAND_CONNECTIONS, {
+                color: 'rgba(255, 255, 255, 0.2)',
+                lineWidth: 2
+            });
+            drawLandmarks(ctx, hand, {
+                color: '#fff',
+                lineWidth: 1,
+                radius: 2
+            });
+
+            // Logic for drawing
+            const thumb = hand[4];
+            const index = hand[8];
+            const middle = hand[12];
+            
+            // Calculate distance in pixels rather than normalized for better consistency
+            const thumbPt = mapToCanvas(thumb);
+            const indexPt = mapToCanvas(index);
+            const pixelDist = Math.hypot(thumbPt.x - indexPt.x, thumbPt.y - indexPt.y);
+            
+            // A generous threshold of 80 pixels
+            const isPinching = pixelDist < 80; 
+            
+            // Alternative: Just extending the index finger and curling the middle finger
+            const isIndexUp = hand[8].y < hand[6].y;
+            const isMiddleDown = hand[12].y > hand[10].y;
+            const isPointing = isIndexUp && isMiddleDown;
+            
+            // Draw if they are pinching OR pointing
+            const isDrawing = isPinching || isPointing;
+            
+            // The drawing point is the index tip
+            const drawPt = indexPt;
+            
+            if (isDrawing) {
+                isDrawingGlobal = true;
+                
+                // Highlight the drawing tip on mainCanvas
+                ctx.beginPath();
+                ctx.arc(drawPt.x, drawPt.y, 8, 0, Math.PI * 2);
+                ctx.fillStyle = currentTheme === 'Eraser' ? '#fff' : themes[currentTheme](time);
+                ctx.fill();
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = currentTheme === 'Eraser' ? '#fff' : themes[currentTheme](time);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+
+                if (lastDrawPoints[handIndex]) {
+                    // Draw on the persistent drawingCanvas
+                    drawingCtx.beginPath();
+                    drawingCtx.moveTo(lastDrawPoints[handIndex].x, lastDrawPoints[handIndex].y);
+                    drawingCtx.lineTo(drawPt.x, drawPt.y);
+                    
+                    if (currentTheme === 'Eraser') {
+                        drawingCtx.globalCompositeOperation = 'destination-out';
+                        drawingCtx.strokeStyle = 'rgba(0,0,0,1)';
+                        drawingCtx.lineWidth = 30; // Thicker eraser
+                        drawingCtx.lineCap = 'round';
+                        drawingCtx.lineJoin = 'round';
+                        drawingCtx.stroke();
+                        drawingCtx.globalCompositeOperation = 'source-over';
+                    } else {
+                        drawingCtx.strokeStyle = themes[currentTheme](time);
+                        drawingCtx.lineWidth = 6;
+                        drawingCtx.lineCap = 'round';
+                        drawingCtx.lineJoin = 'round';
+                        // Add glow effect to lines
+                        drawingCtx.shadowBlur = 10;
+                        drawingCtx.shadowColor = themes[currentTheme](time);
+                        drawingCtx.stroke();
+                        drawingCtx.shadowBlur = 0;
+                    }
+                }
+                lastDrawPoints[handIndex] = drawPt;
+            } else {
+                // Not pinching, clear the last point so lines don't connect when repinching
+                delete lastDrawPoints[handIndex];
+                
+                // Show normal cursor for index finger
+                ctx.beginPath();
+                ctx.arc(drawPt.x, drawPt.y, 5, 0, Math.PI * 2);
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+        });
+    } else {
+        lastDrawPoints = {};
+    }
+    
+    uiStatus.innerText = isDrawingGlobal ? (currentTheme === 'Eraser' ? "Erasing" : "Drawing") : "Hovering";
+    uiStatus.style.color = isDrawingGlobal ? (currentTheme === 'Eraser' ? "#ffffff" : themes[currentTheme](time)) : "var(--accent)";
+}
+
+/**
+ * MEDIAPIPE INITIALIZATION
+ */
+function initMediaPipe() {
+    const hands = new Hands({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
+
+    hands.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1, 
+        minDetectionConfidence: 0.7,
+        minTrackingConfidence: 0.7
+    });
+
+    hands.onResults((results) => {
+        uiHands.innerText = results.multiHandLandmarks ? results.multiHandLandmarks.length : 0;
+        currentHands = results.multiHandLandmarks || [];
+    });
+
+    const camera = new Camera(videoElement, {
+        onFrame: async () => {
+            await hands.send({image: videoElement});
+        },
+        width: 1280,
+        height: 720,
+        facingMode: 'user'
+    });
+    
+    camera.start();
+}
+
+</script>
+</body>
+</html>
